@@ -1,0 +1,162 @@
+1. Why there is no speedup for put phase?
+
+    Answer -> The put() function calls the insert() function where we see that malloc() is used to allocate memory. When you refer to the manual of malloc() by using the command 'man malloc' in the terminal, you will see that for multithreaded application, malloc() uses mutexes internally to avoid corruption and protect the memory-management data structures employed by the malloc() function.
+
+    Therefore, in our case, there is only one allocator for dynamic memory allocation which is shared between the two threads. Due to its internal mutexes, the threads cannot execute the malloc command in parallel unlike the commands in get function. Hence, the total time taken for put phase stays the same as one thread will execute malloc first and then the other thread will get to execute it once the internal lock is unlocked by the first thread. Since there are no such invocations in the get phase in contrast to the put phase, it gets speedup while put phase does not get speedup.
+
+-------------------------------------------------------------------------------------------------------------------------
+
+2. Why are there missing keys with 2 or more threads, but not with 1 thread? Identify a sequence of events that can lead to keys missing for 2 threads.
+
+    Answer -> In the following section of the thread() function:
+
+    for (i = 0; i < b; i++) 
+    {
+        // printf("%d: put %d\n", n, b*n+i);
+        put(keys[b*n + i], n);                  //This is the section under discussion
+    }
+
+    The put() function invokes the insert() function where insertion is done on the same table which is shared by both of the threads. Following section shows where that happens:
+
+    static 
+    void put(int key, int value)
+    {
+    int i = key % NBUCKET;
+    insert(key, value, &table[i], table[i]);  //This is the section under discussion
+    }
+
+    At times when both the thread perform insertion on the same table, the changes of one of the threads are not done properly due to which we end up getting the missing keys problem. Following section shows where that happens:
+
+    static void 
+    insert(int key, int value, struct entry **p, struct entry *n)
+    {
+    struct entry *e = malloc(sizeof(struct entry));
+    e->key = key;
+    e->value = value;
+    e->next = n;
+    *p = e;                                   //This is the section under discussion
+    }
+
+    When only 1 thread is used, there is no problem of having a shared table, only one thread performs insertion on that table at a time and hence, there is no missing key issue in that case. 
+
+    We can avoid the missing key problem for multiple threads by using locks for the critical section (insertion).
+
+-------------------------------------------------------------------------------------------------------------------------
+
+3. Is the two-threaded version faster than the single-threaded version?
+
+    Answer -> No, the two-threaded version is actually slower than the single-threaded version. This is because we are using locks in the get function as well where it is not required and we end up utilizing more time.
+
+    The outputs for this observation is shown below:
+
+    shreyans@ZENBOOK-SHREYANS:/mnt/d/SHREYANS/PG_Work/CS5348_Operating_Systems_Concepts/Exercises/E3/Operating_Systems_Threads_and_Locking$ ./a.out 1
+    0: put time = 0.010133
+    0: get time = 1.702070
+    0: 0 keys missing
+    completion time = 1.712659      //This is the time under discussion, it is faster
+
+    shreyans@ZENBOOK-SHREYANS:/mnt/d/SHREYANS/PG_Work/CS5348_Operating_Systems_Concepts/Exercises/E3/Operating_Systems_Threads_and_Locking$ ./a.out 2
+    1: put time = 0.039020
+    0: put time = 0.041026
+    1: get time = 3.647547
+    1: 0 keys missing
+    0: get time = 3.649506
+    0: 0 keys missing
+    completion time = 3.690995      //This is the time under discussion, it is slower
+
+    In get function, we are simply reading from the shared table and no data is being modified. Hence, even if the multiple threads access it at the same time, there will not be any inaccuracies. If we remove the locks from get phase, then the two-threaded version becomes faster than the single-threaded version. 
+    
+    However, we also see that the put time in multiple threaded versions is significantly more than the put time of single-threaded version and it keeps on increasing with increase in the number of threads. The outputs are shown below for these observations:
+
+    shreyans@ZENBOOK-SHREYANS:/mnt/d/SHREYANS/PG_Work/CS5348_Operating_Systems_Concepts/Exercises/E3/Operating_Systems_Threads_and_Locking$ ./a.out 1
+    0: put time = 0.010459          //This is the time under discussion
+    0: get time = 1.322186
+    0: 0 keys missing
+    completion time = 1.333203
+
+    shreyans@ZENBOOK-SHREYANS:/mnt/d/SHREYANS/PG_Work/CS5348_Operating_Systems_Concepts/Exercises/E3/Operating_Systems_Threads_and_Locking$ ./a.out 2
+    1: put time = 0.034143          //This is the time under discussion
+    0: put time = 0.035195          //This is the time under discussion
+    0: get time = 0.593124
+    0: 0 keys missing
+    1: get time = 0.666829
+    1: 0 keys missing
+    completion time = 0.702444
+
+    shreyans@ZENBOOK-SHREYANS:/mnt/d/SHREYANS/PG_Work/CS5348_Operating_Systems_Concepts/Exercises/E3/Operating_Systems_Threads_and_Locking$ ./a.out 4
+    3: put time = 0.052688          //This is the time under discussion
+    0: put time = 0.054251          //This is the time under discussion
+    2: put time = 0.058857          //This is the time under discussion
+    1: put time = 0.060004          //This is the time under discussion
+    1: get time = 0.377240
+    1: 0 keys missing
+    2: get time = 0.428028
+    2: 0 keys missing
+    0: get time = 0.447074
+    0: 0 keys missing
+    3: get time = 0.455478
+    3: 0 keys missing
+    completion time = 0.516151
+
+    To solve this problem, we can use locks for put operations per bucket rather than using it per put operation so some of the put operations which do not have any contention between multiple threads can be done in parrallel while maintaining the accuracy.
+
+-------------------------------------------------------------------------------------------------------------------------
+
+4. What do you observe?
+
+    Answer -> After the use of locks for put operations per bucket rather than using it per put operation, the put time for two-threaded version is approximately the same time as put time for single-threaded versions. 
+    
+    This is the kind of output we would expect. The put time no longer takes more time unlike our observations in Q3. The new outputs for the observations made is given below:
+
+    shreyans@ZENBOOK-SHREYANS:/mnt/d/SHREYANS/PG_Work/CS5348_Operating_Systems_Concepts/Exercises/E3/Operating_Systems_Threads_and_Locking$ ./a.out 1
+    0: put time = 0.011595
+    0: get time = 1.742055
+    0: 0 keys missing
+    completion time = 1.754321
+
+    shreyans@ZENBOOK-SHREYANS:/mnt/d/SHREYANS/PG_Work/CS5348_Operating_Systems_Concepts/Exercises/E3/Operating_Systems_Threads_and_Locking$ ./a.out 2
+    0: put time = 0.012451
+    1: put time = 0.013048
+    0: get time = 0.684785
+    0: 0 keys missing
+    1: get time = 0.690048
+    1: 0 keys missing
+    completion time = 0.703858
+
+-------------------------------------------------------------------------------------------------------------------------
+
+5. What do you infer when you repeat the above experiments for more than 2 threads (say, 10 or more?)
+
+    Answer -> This one answer is based on CS2 machine. With increase in the number threads, the total completion time decreases. It is shown below (Some portions of output are skipped with '...' to show the significant portions only):
+
+    {cslinux2:~/ssp210009/cs5348/E3} ./a.out 1
+    ...
+    completion time = 0.851534
+
+    {cslinux2:~/ssp210009/cs5348/E3} ./a.out 2
+    ...
+    completion time = 0.470324
+
+    {cslinux2:~/ssp210009/cs5348/E3} ./a.out 4
+    ...
+    completion time = 0.265716
+
+    {cslinux2:~/ssp210009/cs5348/E3} ./a.out 8
+    ...
+    completion time = 0.178258
+
+    {cslinux2:~/ssp210009/cs5348/E3} ./a.out 16
+    ...
+    completion time = 0.118919
+    
+    However, when more than 16 threads are used, the total completion time again starts to increase. It is shown below:
+
+    {cslinux2:~/ssp210009/cs5348/E3} ./a.out 20
+    ...
+    completion time = 0.135984
+
+    Hence, 16 threads gives the best completion time. The performance again starts degrading for more than 16 threads (put time increases/completion time increases).
+
+    My assumption is we get the best performance when the number of threads used are twice the number of cores available on the system. Hence, CS2 gave best completion time at 16 threads since it has 8 cores. I observed a similar behaviour on my personal computer with 2 cores. There might be some hardware limitations for multi-thread applications from system to system.
+
+-------------------------------------------------------------------------------------------------------------------------
